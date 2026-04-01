@@ -19,18 +19,24 @@ vi.mock('fs', async (importOriginal) => {
     ...actual,
     default: {
       ...actual,
-      readFileSync: vi.fn((filePath: string, ...args: unknown[]) => {
-        if (typeof filePath === 'string' && filePath.includes('.credentials.json')) {
+      readFileSync: vi.fn((...args: Parameters<typeof actual.readFileSync>) => {
+        if (
+          typeof args[0] === 'string' &&
+          args[0].includes('.credentials.json')
+        ) {
           throw new Error('ENOENT');
         }
-        return actual.readFileSync(filePath, ...args);
+        return actual.readFileSync(...args);
       }),
     },
-    readFileSync: vi.fn((filePath: string, ...args: unknown[]) => {
-      if (typeof filePath === 'string' && filePath.includes('.credentials.json')) {
+    readFileSync: vi.fn((...args: Parameters<typeof actual.readFileSync>) => {
+      if (
+        typeof args[0] === 'string' &&
+        args[0].includes('.credentials.json')
+      ) {
         throw new Error('ENOENT');
       }
-      return actual.readFileSync(filePath, ...args);
+      return actual.readFileSync(...args);
     }),
   };
 });
