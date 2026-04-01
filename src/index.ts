@@ -12,7 +12,10 @@ import {
   POLL_INTERVAL,
   TIMEZONE,
 } from './config.js';
-import { startCredentialProxy } from './credential-proxy.js';
+import {
+  startCredentialProxy,
+  startProactiveRefresh,
+} from './credential-proxy.js';
 import './channels/index.js';
 import {
   getChannelFactory,
@@ -537,6 +540,8 @@ async function main(): Promise<void> {
     CREDENTIAL_PROXY_PORT,
     PROXY_BIND_HOST,
   );
+  // Keep OAuth tokens fresh even when no requests are coming in
+  startProactiveRefresh();
 
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {

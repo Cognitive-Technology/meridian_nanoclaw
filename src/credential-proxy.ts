@@ -286,6 +286,47 @@ export function startCredentialProxy(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Proactive token refresh
+// ---------------------------------------------------------------------------
+
+/** Interval handle for the background refresh timer. */
+let refreshInterval: ReturnType<typeof setInterval> | null = null;
+
+/** Check token health and refresh proactively. Runs on a timer. */
+async function proactiveRefresh(): Promise<void> {
+  const creds = readCredentials();
+  if (!creds) return;
+  const expiresIn = creds.expiresAt - Date.now();
+  if (expiresIn < REFRESH_BUFFER_MS) {
+    logger.info(
+      { expiresInMs: expiresIn },
+      'Proactive refresh: token expiring soon',
+    );
+    await refreshToken(creds);
+  }
+}
+
+/**
+ * Start a background timer that refreshes OAuth tokens before they expire,
+ * even when no requests are coming in. Checks every 30 minutes.
+ */
+export function startProactiveRefresh(): void {
+  if (refreshInterval) return;
+  const INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+  refreshInterval = setInterval(() => {
+    proactiveRefresh().catch((err) =>
+      logger.warn({ err }, 'Proactive refresh error'),
+    );
+  }, INTERVAL_MS);
+  // Also run once immediately on startup after a short delay
+  setTimeout(() => {
+    proactiveRefresh().catch((err) =>
+      logger.warn({ err }, 'Initial proactive refresh error'),
+    );
+  }, 5000);
+}
+
 /** Detect which auth mode the host is configured for. */
 export function detectAuthMode(): AuthMode {
   const secrets = readEnvFile(['ANTHROPIC_API_KEY']);
