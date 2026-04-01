@@ -9,19 +9,181 @@
  *             API key via /api/oauth/claude_cli/create_api_key.
  *             Proxy injects real OAuth token on that exchange request;
  *             subsequent requests carry the temp key which is valid as-is.
+ *
+ * OAuth tokens are read from ~/.claude/.credentials.json (kept fresh by
+ * Claude Code) and refreshed proactively when expiring.
  */
 import { createServer, Server } from 'http';
 import { request as httpsRequest } from 'https';
 import { request as httpRequest, RequestOptions } from 'http';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
+
+const CLAUDE_OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
+const CLAUDE_OAUTH_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
+/** Refresh proactively when less than this many ms remain. */
+const REFRESH_BUFFER_MS = 5 * 60 * 1000;
+
+/** Credentials file path used by Claude Code. */
+const CRED_FILE = path.join(os.homedir(), '.claude', '.credentials.json');
 
 export type AuthMode = 'api-key' | 'oauth';
 
 export interface ProxyConfig {
   authMode: AuthMode;
 }
+
+// ---------------------------------------------------------------------------
+// OAuth credential management
+// ---------------------------------------------------------------------------
+
+interface OAuthCreds {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+}
+
+function readCredentials(): OAuthCreds | null {
+  try {
+    const data = JSON.parse(fs.readFileSync(CRED_FILE, 'utf-8'));
+    const o = data?.claudeAiOauth;
+    if (o?.accessToken && o?.refreshToken && o?.expiresAt)
+      return o as OAuthCreds;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+function writeCredentials(creds: OAuthCreds): void {
+  try {
+    let data: Record<string, unknown> = {};
+    try {
+      data = JSON.parse(fs.readFileSync(CRED_FILE, 'utf-8'));
+    } catch {
+      /* ok */
+    }
+    data.claudeAiOauth = {
+      ...((data.claudeAiOauth as object) || {}),
+      ...creds,
+    };
+    fs.writeFileSync(CRED_FILE, JSON.stringify(data, null, 2));
+    logger.info('Refreshed credentials written to file');
+  } catch (err) {
+    logger.warn({ err }, 'Failed to write refreshed credentials');
+  }
+}
+
+function fetchJson(
+  url: string,
+  body: string,
+): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const req = httpsRequest(
+      {
+        hostname: u.hostname,
+        port: 443,
+        path: u.pathname,
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          'content-length': Buffer.byteLength(body),
+        },
+      },
+      (res) => {
+        let raw = '';
+        res.on('data', (c: Buffer) => {
+          raw += c.toString();
+        });
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(raw));
+          } catch {
+            reject(new Error(`Non-JSON response: ${raw.slice(0, 200)}`));
+          }
+        });
+      },
+    );
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+/** In-flight refresh promise — prevents concurrent refresh storms. */
+let refreshPromise: Promise<string | null> | null = null;
+
+async function refreshToken(creds: OAuthCreds): Promise<string | null> {
+  if (refreshPromise) return refreshPromise;
+  refreshPromise = (async () => {
+    try {
+      const body = new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: creds.refreshToken,
+        client_id: CLAUDE_OAUTH_CLIENT_ID,
+      }).toString();
+      const json = await fetchJson(CLAUDE_OAUTH_TOKEN_URL, body);
+      if (json.error) {
+        logger.error({ error: json.error }, 'OAuth token refresh failed');
+        return null;
+      }
+      const next: OAuthCreds = {
+        accessToken: json.access_token as string,
+        refreshToken: (json.refresh_token as string) || creds.refreshToken,
+        expiresAt: Date.now() + (Number(json.expires_in) || 3600) * 1000,
+      };
+      writeCredentials(next);
+      logger.info('OAuth token refreshed successfully');
+      return next.accessToken;
+    } catch (err) {
+      logger.error({ err }, 'OAuth token refresh error');
+      return null;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+  return refreshPromise;
+}
+
+/**
+ * Returns a valid OAuth access token, refreshing if needed.
+ * Reads ~/.claude/.credentials.json fresh each call so Claude Code's own
+ * auto-refresh is picked up immediately.
+ */
+async function getOAuthToken(): Promise<string | null> {
+  const creds = readCredentials();
+  if (!creds) {
+    logger.warn('No OAuth credentials found in ~/.claude/.credentials.json');
+    return null;
+  }
+  const expiresIn = creds.expiresAt - Date.now();
+  if (expiresIn < REFRESH_BUFFER_MS) {
+    logger.info(
+      { expiresInMs: expiresIn },
+      'OAuth token expiring soon, refreshing...',
+    );
+    const refreshed = await refreshToken(creds);
+    return refreshed ?? creds.accessToken; // fall back to existing if refresh fails
+  }
+  return creds.accessToken;
+}
+
+/**
+ * Synchronously read the current access token (no refresh).
+ * Used by the container runner to inject a valid token at startup.
+ */
+export function readCurrentAccessToken(): string | null {
+  return readCredentials()?.accessToken ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Proxy server
+// ---------------------------------------------------------------------------
 
 export function startCredentialProxy(
   port: number,
@@ -35,7 +197,10 @@ export function startCredentialProxy(
   ]);
 
   const authMode: AuthMode = secrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
-  const oauthToken =
+
+  // For OAuth, prefer reading from .credentials.json (auto-refreshed).
+  // Fall back to .env tokens if .credentials.json is unavailable.
+  const envOauthToken =
     secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.ANTHROPIC_AUTH_TOKEN;
 
   const upstreamUrl = new URL(
@@ -48,7 +213,7 @@ export function startCredentialProxy(
     const server = createServer((req, res) => {
       const chunks: Buffer[] = [];
       req.on('data', (c) => chunks.push(c));
-      req.on('end', () => {
+      req.on('end', async () => {
         const body = Buffer.concat(chunks);
         const headers: Record<string, string | number | string[] | undefined> =
           {
@@ -73,6 +238,9 @@ export function startCredentialProxy(
           // x-api-key only, so they pass through without token injection.
           if (headers['authorization']) {
             delete headers['authorization'];
+            // Try live token from .credentials.json (auto-refreshed),
+            // fall back to static .env token
+            const oauthToken = (await getOAuthToken()) || envOauthToken;
             if (oauthToken) {
               headers['authorization'] = `Bearer ${oauthToken}`;
             }

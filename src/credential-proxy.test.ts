@@ -11,6 +11,30 @@ vi.mock('./logger.js', () => ({
   logger: { info: vi.fn(), error: vi.fn(), debug: vi.fn(), warn: vi.fn() },
 }));
 
+// Mock fs so readCredentials() returns null (no ~/.claude/.credentials.json).
+// This forces the proxy to fall back to .env tokens, matching test expectations.
+vi.mock('fs', async (importOriginal) => {
+  const actual = (await importOriginal()) as typeof import('fs');
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      readFileSync: vi.fn((filePath: string, ...args: unknown[]) => {
+        if (typeof filePath === 'string' && filePath.includes('.credentials.json')) {
+          throw new Error('ENOENT');
+        }
+        return actual.readFileSync(filePath, ...args);
+      }),
+    },
+    readFileSync: vi.fn((filePath: string, ...args: unknown[]) => {
+      if (typeof filePath === 'string' && filePath.includes('.credentials.json')) {
+        throw new Error('ENOENT');
+      }
+      return actual.readFileSync(filePath, ...args);
+    }),
+  };
+});
+
 import { startCredentialProxy } from './credential-proxy.js';
 
 function makeRequest(
