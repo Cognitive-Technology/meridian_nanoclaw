@@ -284,6 +284,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   const output = await runAgent(group, prompt, chatJid, async (result) => {
     // Streaming output callback — called for each agent result
     if (result.result) {
+      // Clear typing indicator immediately when first output arrives
+      await channel.setTyping?.(chatJid, false);
+
       const raw =
         typeof result.result === 'string'
           ? result.result
@@ -691,10 +694,19 @@ async function main(): Promise<void> {
     },
   });
   startIpcWatcher({
-    sendMessage: (jid, text) => {
+    sendMessage: (jid, text, opts) => {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
-      return channel.sendMessage(jid, text);
+      return channel.sendMessage(jid, text, opts);
+    },
+    sendMedia: (jid, filePath, filename) => {
+      const channel = findChannel(channels, jid);
+      if (!channel) throw new Error(`No channel for JID: ${jid}`);
+      if (!channel.sendMedia) {
+        logger.warn({ jid }, 'Channel does not support sendMedia');
+        return Promise.resolve();
+      }
+      return channel.sendMedia(jid, filePath, filename);
     },
     registeredGroups: () => registeredGroups,
     registerGroup,
