@@ -130,6 +130,14 @@ async function refreshToken(creds: OAuthCreds): Promise<string | null> {
       const json = await fetchJson(CLAUDE_OAUTH_TOKEN_URL, body);
       if (json.error) {
         logger.error({ error: json.error }, 'OAuth token refresh failed');
+        consecutiveFailures++;
+        // Notify on first failure, then every 5th to avoid spam
+        if (authFailureNotifier && (consecutiveFailures === 1 || consecutiveFailures % 5 === 0)) {
+          const msg = json.error === 'invalid_grant'
+            ? `⚠️ Claude OAuth token is dead (invalid_grant). I can't process any messages until you re-authenticate. Run \`claude auth login\` on the server.`
+            : `⚠️ Claude OAuth refresh failed (${json.error}). Attempt #${consecutiveFailures}. Will keep retrying.`;
+          authFailureNotifier(msg);
+        }
         return null;
       }
       const next: OAuthCreds = {
@@ -138,7 +146,15 @@ async function refreshToken(creds: OAuthCreds): Promise<string | null> {
         expiresAt: Date.now() + (Number(json.expires_in) || 3600) * 1000,
       };
       writeCredentials(next);
-      logger.info('OAuth token refreshed successfully');
+      if (consecutiveFailures > 0) {
+        logger.info(
+          { previousFailures: consecutiveFailures },
+          'OAuth token refreshed successfully (recovered)',
+        );
+      } else {
+        logger.info('OAuth token refreshed successfully');
+      }
+      consecutiveFailures = 0;
       return next.accessToken;
     } catch (err) {
       logger.error({ err }, 'OAuth token refresh error');
@@ -159,6 +175,10 @@ async function getOAuthToken(): Promise<string | null> {
   const creds = readCredentials();
   if (!creds) {
     logger.warn('No OAuth credentials found in ~/.claude/.credentials.json');
+    consecutiveFailures++;
+    if (authFailureNotifier && consecutiveFailures === 1) {
+      authFailureNotifier('⚠️ Claude credentials file is missing (~/.claude/.credentials.json). I\'m completely offline until you run `claude auth login` on the server.');
+    }
     return null;
   }
   const expiresIn = creds.expiresAt - Date.now();
@@ -292,6 +312,22 @@ export function startCredentialProxy(
 
 /** Interval handle for the background refresh timer. */
 let refreshInterval: ReturnType<typeof setInterval> | null = null;
+
+// ---------------------------------------------------------------------------
+// Auth failure notifications
+// ---------------------------------------------------------------------------
+
+/** Callback to notify the user when OAuth auth is broken. */
+let authFailureNotifier: ((message: string) => void) | null = null;
+let consecutiveFailures = 0;
+
+/**
+ * Register a callback that fires when OAuth refresh fails.
+ * Called once from index.ts after Slack connects.
+ */
+export function onAuthFailure(cb: (message: string) => void): void {
+  authFailureNotifier = cb;
+}
 
 /** Check token health and refresh proactively. Runs on a timer. */
 async function proactiveRefresh(): Promise<void> {

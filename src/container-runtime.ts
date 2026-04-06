@@ -105,11 +105,11 @@ export function ensureContainerRuntimeRunning(): void {
   }
 }
 
-/** Kill orphaned NanoClaw containers from previous runs. */
-export function cleanupOrphans(): void {
+/** Kill orphaned containers from previous runs matching the given prefix. */
+export function cleanupOrphans(prefix = 'nanoclaw'): void {
   try {
     const output = execSync(
-      `${CONTAINER_RUNTIME_BIN} ps --filter name=nanoclaw- --format '{{.Names}}'`,
+      `${CONTAINER_RUNTIME_BIN} ps --filter name=${prefix}- --format '{{.Names}}'`,
       { stdio: ['pipe', 'pipe', 'pipe'], encoding: 'utf-8' },
     );
     const orphans = output.trim().split('\n').filter(Boolean);

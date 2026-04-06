@@ -19,10 +19,7 @@ export const ASSISTANT_NAME =
 export const ASSISTANT_HAS_OWN_NUMBER =
   (process.env.ASSISTANT_HAS_OWN_NUMBER ||
     envConfig.ASSISTANT_HAS_OWN_NUMBER) === 'true';
-export const POLL_INTERVAL = parseInt(
-  process.env.POLL_INTERVAL || '500',
-  10,
-);
+export const POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL || '500', 10);
 export const SCHEDULER_POLL_INTERVAL = 60000;
 
 // Absolute paths needed for container mounts
@@ -48,6 +45,11 @@ export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
 
 export const CONTAINER_IMAGE =
   process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';
+// Prefix for container names — must be unique per NanoClaw instance on shared hosts.
+// cleanupOrphans kills all containers matching this prefix, so two instances
+// sharing a prefix will kill each other's containers on restart.
+export const CONTAINER_NAME_PREFIX =
+  process.env.CONTAINER_NAME_PREFIX || 'nanoclaw';
 export const CONTAINER_TIMEOUT = parseInt(
   process.env.CONTAINER_TIMEOUT || '1800000',
   10,
@@ -68,9 +70,13 @@ export const MAX_MESSAGES_PER_PROMPT = Math.max(
 );
 export const IPC_POLL_INTERVAL = 1000;
 export const IDLE_TIMEOUT = parseInt(process.env.IDLE_TIMEOUT || '1800000', 10); // 30min default — how long to keep container alive after last result
+export const THREAD_IDLE_TIMEOUT = parseInt(
+  process.env.THREAD_IDLE_TIMEOUT || '600000',
+  10,
+); // 10min default — shorter idle for ephemeral thread containers
 export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
-  parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,
+  parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '10', 10) || 10,
 );
 
 function escapeRegex(str: string): string {

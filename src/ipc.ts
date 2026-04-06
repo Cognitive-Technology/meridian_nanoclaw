@@ -95,8 +95,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
               ) {
                 // Authorization: verify this group can send to this chatJid
                 const targetGroup = registeredGroups[data.chatJid];
-                const allowedOutbound =
-                  folderAllowedOutbound.get(sourceGroup);
+                const allowedOutbound = folderAllowedOutbound.get(sourceGroup);
                 if (
                   isMain ||
                   (targetGroup && targetGroup.folder === sourceGroup) ||
@@ -120,11 +119,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   }
                   if (data.mediaPath) {
                     // Resolve relative media path to absolute host path
-                    const ipcGroupDir = path.join(
-                      DATA_DIR,
-                      'ipc',
-                      sourceGroup,
-                    );
+                    const ipcGroupDir = path.join(DATA_DIR, 'ipc', sourceGroup);
                     const hostMediaPath = path.resolve(
                       ipcGroupDir,
                       data.mediaPath,

@@ -9,13 +9,16 @@ import path from 'path';
 import {
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
+  CONTAINER_NAME_PREFIX,
   CONTAINER_TIMEOUT,
   CREDENTIAL_PROXY_PORT,
   DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
+  THREAD_IDLE_TIMEOUT,
   TIMEZONE,
 } from './config.js';
+import { getConversationHistory } from './db.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import {
@@ -26,7 +29,8 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
-import { validateAdditionalMounts } from './mount-security.js';
+import { getSecretsForGroup } from './secrets.js';
+import { loadMountAllowlist, validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)
@@ -94,6 +98,17 @@ function buildVolumeMounts(
       containerPath: '/workspace/group',
       readonly: false,
     });
+
+    // Global directory — shared CLAUDE.md persona + facts.
+    // Read-write for main so it can update shared content (e.g., pending-followups.md).
+    const mainGlobalDir = path.join(GROUPS_DIR, 'global');
+    if (fs.existsSync(mainGlobalDir)) {
+      mounts.push({
+        hostPath: mainGlobalDir,
+        containerPath: '/workspace/global',
+        readonly: false,
+      });
+    }
   } else {
     // Other groups only get their own folder
     mounts.push({
@@ -209,14 +224,46 @@ function buildVolumeMounts(
     readonly: false,
   });
 
-  // Additional mounts validated against external allowlist (tamper-proof from containers)
+  // Default mounts from allowlist — applied to ALL groups automatically.
+  // This is the single source of truth; per-group additionalMounts in the DB
+  // are only needed for one-off extras beyond the defaults.
+  const allowlist = loadMountAllowlist();
+  if (allowlist?.defaultMounts) {
+    for (const dm of allowlist.defaultMounts) {
+      const expandedPath = dm.path.startsWith('~/')
+        ? path.join(process.env.HOME || '', dm.path.slice(2))
+        : dm.path;
+      if (!fs.existsSync(expandedPath)) {
+        logger.debug(
+          { path: dm.path },
+          'Default mount path does not exist, skipping',
+        );
+        continue;
+      }
+      const effectiveReadonly =
+        !dm.allowReadWrite || (!isMain && allowlist.nonMainReadOnly);
+      mounts.push({
+        hostPath: expandedPath,
+        containerPath: `/workspace/extra/${dm.containerName}`,
+        readonly: effectiveReadonly,
+      });
+    }
+  }
+
+  // Additional per-group mounts validated against allowlist (for extras beyond defaults)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(
       group.containerConfig.additionalMounts,
       group.name,
       isMain,
     );
-    mounts.push(...validatedMounts);
+    // Skip any that duplicate a default mount
+    const existingPaths = new Set(mounts.map((m) => m.containerPath));
+    for (const vm of validatedMounts) {
+      if (!existingPaths.has(vm.containerPath)) {
+        mounts.push(vm);
+      }
+    }
   }
 
   return mounts;
@@ -225,6 +272,7 @@ function buildVolumeMounts(
 function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
+  secretEnv: Record<string, string> = {},
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -246,6 +294,11 @@ function buildContainerArgs(
     args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
   } else {
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+  }
+
+  // Inject service credentials from manifest (ElevenLabs, OpenAI, etc.)
+  for (const [key, value] of Object.entries(secretEnv)) {
+    args.push('-e', `${key}=${value}`);
   }
 
   // Runtime-specific args for host gateway resolution
@@ -287,8 +340,9 @@ export async function runContainerAgent(
 
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
-  const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName);
+  const containerName = `${CONTAINER_NAME_PREFIX}-${safeName}-${Date.now()}`;
+  const { env: secretEnv } = getSecretsForGroup(group.folder);
+  const containerArgs = buildContainerArgs(mounts, containerName, secretEnv);
 
   logger.debug(
     {
@@ -413,9 +467,13 @@ export async function runContainerAgent(
     let timedOut = false;
     let hadStreamingOutput = false;
     const configTimeout = group.containerConfig?.timeout || CONTAINER_TIMEOUT;
-    // Grace period: hard timeout must be at least IDLE_TIMEOUT + 30s so the
+    // Grace period: hard timeout must be at least idle timeout + 30s so the
     // graceful _close sentinel has time to trigger before the hard kill fires.
-    const timeoutMs = Math.max(configTimeout, IDLE_TIMEOUT + 30_000);
+    // Thread groups use a shorter idle timeout to reclaim resources faster.
+    const effectiveIdleTimeout = group.isThreadGroup
+      ? THREAD_IDLE_TIMEOUT
+      : IDLE_TIMEOUT;
+    const timeoutMs = Math.max(configTimeout, effectiveIdleTimeout + 30_000);
 
     const killOnTimeout = () => {
       timedOut = true;
@@ -725,4 +783,22 @@ export function writeGroupsSnapshot(
       2,
     ),
   );
+}
+
+/**
+ * Write full conversation history to the group's IPC directory.
+ * The container's read_conversation_history MCP tool reads this file,
+ * allowing the agent to page back through history when needed.
+ */
+export function writeConversationHistorySnapshot(
+  groupFolder: string,
+  chatJid: string,
+): void {
+  const groupIpcDir = resolveGroupIpcPath(groupFolder);
+  fs.mkdirSync(groupIpcDir, { recursive: true });
+
+  // Write up to 200 messages — enough for deep history lookup
+  const history = getConversationHistory(chatJid, 200);
+  const historyFile = path.join(groupIpcDir, 'conversation_history.json');
+  fs.writeFileSync(historyFile, JSON.stringify(history, null, 2));
 }

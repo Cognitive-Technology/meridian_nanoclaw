@@ -9,8 +9,21 @@ export interface AdditionalMount {
  * This file should be stored at ~/.config/nanoclaw/mount-allowlist.json
  * and is NOT mounted into any container, making it tamper-proof from agents.
  */
+export interface DefaultMount {
+  // Absolute path or ~ for home (e.g., "~/nanoclaw/skills")
+  path: string;
+  // Container mount name — mounted at /workspace/extra/{containerName}
+  containerName: string;
+  // Whether read-write is allowed (default: false)
+  allowReadWrite: boolean;
+  // Optional description for documentation
+  description?: string;
+}
+
 export interface MountAllowlist {
-  // Directories that can be mounted into containers
+  // Default mounts applied to ALL groups automatically (bypasses blocked-pattern check)
+  defaultMounts?: DefaultMount[];
+  // Directories that can be mounted into containers via per-group additionalMounts
   allowedRoots: AllowedRoot[];
   // Glob patterns for paths that should never be mounted (e.g., ".ssh", ".gnupg")
   blockedPatterns: string[];
@@ -41,6 +54,10 @@ export interface RegisteredGroup {
   containerConfig?: ContainerConfig;
   requiresTrigger?: boolean; // Default: true for groups, false for solo chats
   isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
+  // Thread-as-group: ephemeral per-thread containers
+  isThreadGroup?: boolean; // True for auto-created thread groups
+  parentJid?: string; // Parent channel JID (e.g., "slack:C0APUHPBE5Q")
+  threadTs?: string; // Slack thread_ts this group represents
 }
 
 export interface NewMessage {

@@ -68,13 +68,23 @@ class MessageStream {
   private queue: SDKUserMessage[] = [];
   private waiting: (() => void) | null = null;
   private done = false;
+  private sessionId = '';
+
+  /**
+   * Update the session ID used for subsequent messages.
+   * Must be called after the SDK emits system/init with the active session_id,
+   * so that piped follow-up messages stay in the same session context.
+   */
+  setSessionId(id: string): void {
+    this.sessionId = id;
+  }
 
   push(text: string): void {
     this.queue.push({
       type: 'user',
       message: { role: 'user', content: text },
       parent_tool_use_id: null,
-      session_id: '',
+      session_id: this.sessionId,
     });
     this.waiting?.();
   }
@@ -441,6 +451,7 @@ async function runQuery(
 
     if (message.type === 'system' && message.subtype === 'init') {
       newSessionId = message.session_id;
+      stream.setSessionId(newSessionId);
       log(`Session initialized: ${newSessionId}`);
     }
 
@@ -547,6 +558,13 @@ async function main(): Promise<void> {
 
   // Build initial prompt (drain any pending IPC messages too)
   let prompt = containerInput.prompt;
+
+  // Append conversation history hint if the file exists
+  const historyFile = '/workspace/ipc/conversation_history.json';
+  if (fs.existsSync(historyFile)) {
+    prompt += `\n\n<system_note>Full conversation history (including your previous responses) is available at ${historyFile}. Use the Read tool to review it if you need context beyond what's shown above.</system_note>`;
+  }
+
   if (containerInput.isScheduledTask) {
     prompt = `[SCHEDULED TASK - The following message was sent automatically and is not coming directly from the user or group.]\n\n${prompt}`;
   }

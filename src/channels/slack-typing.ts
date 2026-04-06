@@ -17,6 +17,10 @@ import { logger } from '../logger.js';
 // Requires reactions:write scope. Visible from the channel without opening the thread.
 const THINKING_REACTION = 'hourglass_flowing_sand';
 
+// Slack's native typing indicator auto-expires after ~5 seconds.
+// Refresh it every 3 seconds to keep it visible during long-running tasks.
+const TYPING_REFRESH_MS = 3000;
+
 export class SlackTypingIndicator {
   // Whether the assistant.threads.setStatus API is available per channel (detected at runtime).
   // undefined = not yet tested, true = works, false = not available (fall back to reaction).
@@ -28,6 +32,9 @@ export class SlackTypingIndicator {
   // When using reaction fallback: stores 'reaction:<channelId>:<msgTs>'.
   private thinkingTs = new Map<string, string>();
 
+  // Refresh timers for keeping the typing indicator alive during long tasks.
+  private refreshTimers = new Map<string, ReturnType<typeof setInterval>>();
+
   constructor(private app: App) {}
 
   /** Show or hide the typing indicator for a given jid. */
@@ -37,13 +44,14 @@ export class SlackTypingIndicator {
     threadTs: string | undefined,
     lastUserMessageTs: string | undefined,
   ): Promise<void> {
-    const channelId = jid.replace(/^slack:/, '');
+    // Extract channelId from both "slack:CXXX" and "slack:CXXX:t:XXXXX" formats
+    const channelId = jid.replace(/^slack:/, '').split(':')[0];
 
     if (isTyping) {
       if (this.thinkingTs.has(jid)) return; // already showing
 
-      // Try the native assistant typing indicator first.
-      // Requires assistant:write scope + "Agents & AI Apps" enabled in the Slack app.
+      // assistant.threads.setStatus works in both DM and channel threads
+      // since the March 2026 scope update (accepts chat:write scope).
       if (threadTs && this.assistantStatusAvailable.get(channelId) !== false) {
         try {
           await (
@@ -60,6 +68,9 @@ export class SlackTypingIndicator {
           });
           this.thinkingTs.set(jid, `assistant:${threadTs}`);
           this.assistantStatusAvailable.set(channelId, true);
+
+          // Periodically refresh the indicator — Slack auto-expires it after ~5s
+          this.startRefresh(jid, channelId, threadTs);
           return;
         } catch (err) {
           this.assistantStatusAvailable.set(channelId, false);
@@ -91,6 +102,7 @@ export class SlackTypingIndicator {
       const ts = this.thinkingTs.get(jid);
       if (!ts) return;
       this.thinkingTs.delete(jid);
+      this.stopRefresh(jid);
 
       if (ts.startsWith('assistant:')) {
         // Clear the native assistant typing indicator
@@ -129,6 +141,44 @@ export class SlackTypingIndicator {
           logger.warn({ jid, err }, 'Failed to remove thinking reaction');
         }
       }
+    }
+  }
+
+  /** Start periodic refresh of the native typing indicator. */
+  private startRefresh(
+    jid: string,
+    channelId: string,
+    threadTs: string,
+  ): void {
+    this.stopRefresh(jid); // Clear any existing timer
+    const timer = setInterval(async () => {
+      try {
+        await (
+          this.app.client as unknown as {
+            apiCall: (
+              method: string,
+              args: Record<string, unknown>,
+            ) => Promise<void>;
+          }
+        ).apiCall('assistant.threads.setStatus', {
+          channel_id: channelId,
+          thread_ts: threadTs,
+          status: 'is typing...',
+        });
+      } catch {
+        // If refresh fails, stop trying — indicator will expire naturally
+        this.stopRefresh(jid);
+      }
+    }, TYPING_REFRESH_MS);
+    this.refreshTimers.set(jid, timer);
+  }
+
+  /** Stop the periodic refresh for a jid. */
+  private stopRefresh(jid: string): void {
+    const timer = this.refreshTimers.get(jid);
+    if (timer) {
+      clearInterval(timer);
+      this.refreshTimers.delete(jid);
     }
   }
 }
