@@ -4,6 +4,7 @@
  */
 import { ChildProcess, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
@@ -21,6 +22,7 @@ import {
 import { getConversationHistory } from './db.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
+import { getOutboundContacts } from './outbound-contacts.js';
 import {
   CONTAINER_HOST_GATEWAY,
   CONTAINER_RUNTIME_BIN,
@@ -30,7 +32,10 @@ import {
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
 import { getSecretsForGroup } from './secrets.js';
-import { loadMountAllowlist, validateAdditionalMounts } from './mount-security.js';
+import {
+  loadMountAllowlist,
+  validateAdditionalMounts,
+} from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)
@@ -207,13 +212,22 @@ function buildVolumeMounts(
     'agent-runner-src',
   );
   if (fs.existsSync(agentRunnerSrc)) {
-    const srcIndex = path.join(agentRunnerSrc, 'index.ts');
-    const cachedIndex = path.join(groupAgentRunnerDir, 'index.ts');
+    // Compute newest-mtime across all .ts files on both sides. Comparing only
+    // index.ts would miss edits to siblings like ipc-mcp-stdio.ts, leaving the
+    // cached copy stale after a host-side update.
+    const maxMtime = (dir: string): number => {
+      if (!fs.existsSync(dir)) return 0;
+      let max = 0;
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith('.ts')) continue;
+        const m = fs.statSync(path.join(dir, entry.name)).mtimeMs;
+        if (m > max) max = m;
+      }
+      return max;
+    };
     const needsCopy =
       !fs.existsSync(groupAgentRunnerDir) ||
-      !fs.existsSync(cachedIndex) ||
-      (fs.existsSync(srcIndex) &&
-        fs.statSync(srcIndex).mtimeMs > fs.statSync(cachedIndex).mtimeMs);
+      maxMtime(agentRunnerSrc) > maxMtime(groupAgentRunnerDir);
     if (needsCopy) {
       fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
     }
@@ -279,22 +293,18 @@ function buildContainerArgs(
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
-  // Route API traffic through the credential proxy (containers never see real secrets)
-  args.push(
-    '-e',
-    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
-  );
-
-  // Mirror the host's auth method with a placeholder value.
-  // API key mode: SDK sends x-api-key, proxy replaces with real key.
-  // OAuth mode:   SDK exchanges placeholder token for temp API key,
-  //               proxy injects real OAuth token on that exchange request.
+  // Auth: route containers to the right credential source.
   const authMode = detectAuthMode();
   if (authMode === 'api-key') {
+    // API key mode: proxy injects x-api-key on every request.
+    args.push(
+      '-e',
+      `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
+    );
     args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
-  } else {
-    args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
   }
+  // OAuth credential mount is deferred until after volume mounts (see below)
+  // so the file mount overlays the .claude directory mount.
 
   // Inject service credentials from manifest (ElevenLabs, OpenAI, etc.)
   for (const [key, value] of Object.entries(secretEnv)) {
@@ -319,6 +329,17 @@ function buildContainerArgs(
       args.push(...readonlyMountArgs(mount.hostPath, mount.containerPath));
     } else {
       args.push('-v', `${mount.hostPath}:${mount.containerPath}`);
+    }
+  }
+
+  // OAuth mode: mount real credentials AFTER the .claude directory mount
+  // so the file overlays the session directory. SDK handles auth directly.
+  if (authMode === 'oauth') {
+    const credFile = path.join(os.homedir(), '.claude', '.credentials.json');
+    if (fs.existsSync(credFile)) {
+      args.push('-v', `${credFile}:/home/node/.claude/.credentials.json:ro`);
+    } else {
+      logger.warn('OAuth mode but no ~/.claude/.credentials.json found');
     }
   }
 
@@ -777,6 +798,29 @@ export function writeGroupsSnapshot(
     JSON.stringify(
       {
         groups: visibleGroups,
+        lastSync: new Date().toISOString(),
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+/**
+ * Write the global outbound-contacts snapshot into a group's IPC directory
+ * so the agent can discover JIDs it's allowed to DM from any context.
+ * Safe to call on every runAgent — the file is small.
+ */
+export function writeOutboundContactsSnapshot(groupFolder: string): void {
+  const groupIpcDir = resolveGroupIpcPath(groupFolder);
+  fs.mkdirSync(groupIpcDir, { recursive: true });
+
+  const contactsFile = path.join(groupIpcDir, 'outbound_contacts.json');
+  fs.writeFileSync(
+    contactsFile,
+    JSON.stringify(
+      {
+        contacts: getOutboundContacts(),
         lastSync: new Date().toISOString(),
       },
       null,

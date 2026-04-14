@@ -145,26 +145,44 @@ export class SlackTypingIndicator {
   }
 
   /** Start periodic refresh of the native typing indicator. */
-  private startRefresh(
-    jid: string,
-    channelId: string,
-    threadTs: string,
-  ): void {
+  private startRefresh(jid: string, channelId: string, threadTs: string): void {
     this.stopRefresh(jid); // Clear any existing timer
     const timer = setInterval(async () => {
+      // If setTyping(false) has already run, the timer callback may still
+      // have been queued before clearInterval took effect. Bail out.
+      if (!this.thinkingTs.has(jid)) {
+        this.stopRefresh(jid);
+        return;
+      }
+      const api = this.app.client as unknown as {
+        apiCall: (
+          method: string,
+          args: Record<string, unknown>,
+        ) => Promise<void>;
+      };
       try {
-        await (
-          this.app.client as unknown as {
-            apiCall: (
-              method: string,
-              args: Record<string, unknown>,
-            ) => Promise<void>;
-          }
-        ).apiCall('assistant.threads.setStatus', {
+        await api.apiCall('assistant.threads.setStatus', {
           channel_id: channelId,
           thread_ts: threadTs,
           status: 'is typing...',
         });
+        // Race guard: if setTyping(false) fired while the setStatus above was
+        // in-flight, our "is typing..." may have landed at Slack *after* the
+        // clear — leaving the indicator pinned. Self-correct by re-clearing.
+        if (!this.thinkingTs.has(jid)) {
+          await api
+            .apiCall('assistant.threads.setStatus', {
+              channel_id: channelId,
+              thread_ts: threadTs,
+              status: '',
+            })
+            .catch((err) =>
+              logger.warn(
+                { jid, err },
+                'Failed to re-clear typing indicator after race',
+              ),
+            );
+        }
       } catch {
         // If refresh fails, stop trying — indicator will expire naturally
         this.stopRefresh(jid);

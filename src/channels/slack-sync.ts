@@ -77,9 +77,7 @@ export class SlackThreadSync {
             id: msg.ts,
             chat_jid: threadJid,
             sender: msg.user || msg.bot_id || 'unknown',
-            sender_name: isBotMessage
-              ? ASSISTANT_NAME
-              : (msg.user || 'unknown'),
+            sender_name: isBotMessage ? ASSISTANT_NAME : msg.user || 'unknown',
             content: msg.text,
             timestamp: slackTsToIso(msg.ts),
             is_from_me: false,
@@ -121,9 +119,7 @@ export class SlackThreadSync {
     if (!latestStored) return 0; // No history yet, nothing to gap-fill
 
     try {
-      const oldestNeeded = (
-        new Date(latestStored).getTime() / 1000
-      ).toFixed(6);
+      const oldestNeeded = (new Date(latestStored).getTime() / 1000).toFixed(6);
 
       let messages;
       if (threadTs) {
@@ -156,9 +152,7 @@ export class SlackThreadSync {
           id: msg.ts,
           chat_jid: jid,
           sender: msg.user || msg.bot_id || 'unknown',
-          sender_name: isBotMessage
-            ? ASSISTANT_NAME
-            : (msg.user || 'unknown'),
+          sender_name: isBotMessage ? ASSISTANT_NAME : msg.user || 'unknown',
           content: msg.text,
           timestamp: slackTsToIso(msg.ts),
           is_from_me: false,
@@ -218,9 +212,7 @@ export class SlackThreadSync {
   /**
    * Start periodic background sync.
    */
-  startPeriodicSync(
-    getGroups: () => Record<string, RegisteredGroup>,
-  ): void {
+  startPeriodicSync(getGroups: () => Record<string, RegisteredGroup>): void {
     if (this.periodicTimer) return;
 
     this.periodicTimer = setInterval(async () => {

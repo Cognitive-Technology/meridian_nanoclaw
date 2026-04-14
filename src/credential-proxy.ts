@@ -132,10 +132,14 @@ async function refreshToken(creds: OAuthCreds): Promise<string | null> {
         logger.error({ error: json.error }, 'OAuth token refresh failed');
         consecutiveFailures++;
         // Notify on first failure, then every 5th to avoid spam
-        if (authFailureNotifier && (consecutiveFailures === 1 || consecutiveFailures % 5 === 0)) {
-          const msg = json.error === 'invalid_grant'
-            ? `⚠️ Claude OAuth token is dead (invalid_grant). I can't process any messages until you re-authenticate. Run \`claude auth login\` on the server.`
-            : `⚠️ Claude OAuth refresh failed (${json.error}). Attempt #${consecutiveFailures}. Will keep retrying.`;
+        if (
+          authFailureNotifier &&
+          (consecutiveFailures === 1 || consecutiveFailures % 5 === 0)
+        ) {
+          const msg =
+            json.error === 'invalid_grant'
+              ? `⚠️ Claude OAuth token is dead (invalid_grant). I can't process any messages until you re-authenticate. Run \`claude auth login\` on the server.`
+              : `⚠️ Claude OAuth refresh failed (${json.error}). Attempt #${consecutiveFailures}. Will keep retrying.`;
           authFailureNotifier(msg);
         }
         return null;
@@ -177,7 +181,9 @@ async function getOAuthToken(): Promise<string | null> {
     logger.warn('No OAuth credentials found in ~/.claude/.credentials.json');
     consecutiveFailures++;
     if (authFailureNotifier && consecutiveFailures === 1) {
-      authFailureNotifier('⚠️ Claude credentials file is missing (~/.claude/.credentials.json). I\'m completely offline until you run `claude auth login` on the server.');
+      authFailureNotifier(
+        "⚠️ Claude credentials file is missing (~/.claude/.credentials.json). I'm completely offline until you run `claude auth login` on the server.",
+      );
     }
     return null;
   }

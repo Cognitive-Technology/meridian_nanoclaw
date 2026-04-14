@@ -38,7 +38,11 @@ export interface SlackChannelOpts {
   registeredGroups: () => Record<string, RegisteredGroup>;
   // Called when a thread reply arrives for a registered channel but no thread group exists yet.
   // The host creates the group dynamically so the message can be routed.
-  onThreadGroup?: (threadJid: string, parentJid: string, threadTs: string) => void;
+  onThreadGroup?: (
+    threadJid: string,
+    parentJid: string,
+    threadTs: string,
+  ) => void;
 }
 
 /** Cached user name with TTL. Borrowed from Chat SDK's 8-day cache pattern. */
@@ -77,7 +81,10 @@ export class SlackChannel implements Channel {
     // one conversation so the thread should always be reused.
     const channelId = jid.replace(/^slack:/, '');
     const isDm = channelId.startsWith('D');
-    if (!isDm && Date.now() - entry.setAt > SlackChannel.THREAD_CONTEXT_TTL_MS) {
+    if (
+      !isDm &&
+      Date.now() - entry.setAt > SlackChannel.THREAD_CONTEXT_TTL_MS
+    ) {
       this.activeThreadTs.delete(jid);
       return undefined;
     }
@@ -131,7 +138,10 @@ export class SlackChannel implements Channel {
       ) as Record<string, Array<{ ts: string; savedAt: number }>>;
       for (const [jid, entries] of Object.entries(raw)) {
         if (entries.length > 0) {
-          this.botParticipatedThreads.set(jid, new Set(entries.map((e) => e.ts)));
+          this.botParticipatedThreads.set(
+            jid,
+            new Set(entries.map((e) => e.ts)),
+          );
         }
       }
     } catch {
@@ -298,7 +308,13 @@ export class SlackChannel implements Channel {
       const isGroup = msg.channel_type !== 'im';
 
       // Always report metadata for group discovery (channel-level)
-      this.opts.onChatMetadata(channelJid, timestamp, undefined, 'slack', isGroup);
+      this.opts.onChatMetadata(
+        channelJid,
+        timestamp,
+        undefined,
+        'slack',
+        isGroup,
+      );
 
       // Determine routing: thread replies go to thread-specific JIDs,
       // channel-level messages go to the channel JID.
@@ -526,8 +542,9 @@ export class SlackChannel implements Channel {
 
     try {
       // Thread JIDs always reply in their thread; channel JIDs use activeThread
-      const threadTs = embeddedThreadTs
-        || (opts?.noThread ? undefined : this.getActiveThread(jid));
+      const threadTs =
+        embeddedThreadTs ||
+        (opts?.noThread ? undefined : this.getActiveThread(jid));
       // Slack limits messages to ~4000 characters; split if needed
       let postedTs: string | undefined;
       if (text.length <= MAX_MESSAGE_LENGTH) {

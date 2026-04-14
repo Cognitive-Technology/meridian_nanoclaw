@@ -131,12 +131,8 @@ function createSchema(database: Database.Database): void {
     database.exec(
       `ALTER TABLE registered_groups ADD COLUMN is_thread_group INTEGER DEFAULT 0`,
     );
-    database.exec(
-      `ALTER TABLE registered_groups ADD COLUMN parent_jid TEXT`,
-    );
-    database.exec(
-      `ALTER TABLE registered_groups ADD COLUMN thread_ts TEXT`,
-    );
+    database.exec(`ALTER TABLE registered_groups ADD COLUMN parent_jid TEXT`);
+    database.exec(`ALTER TABLE registered_groups ADD COLUMN thread_ts TEXT`);
   } catch {
     /* columns already exist */
   }

@@ -43,7 +43,9 @@ export function formatWithChannelContext(
       const roleAttr = m.is_bot_message ? ' role="assistant"' : '';
       return `<message sender="${escapeXml(m.sender_name)}" time="${escapeXml(displayTime)}"${roleAttr}>${escapeXml(m.content)}</message>`;
     });
-    parts.push(`<channel_context>\n${contextLines.join('\n')}\n</channel_context>`);
+    parts.push(
+      `<channel_context>\n${contextLines.join('\n')}\n</channel_context>`,
+    );
   }
 
   const threadLines = threadMessages.map((m) => {

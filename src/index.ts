@@ -29,6 +29,7 @@ import {
   runContainerAgent,
   writeConversationHistorySnapshot,
   writeGroupsSnapshot,
+  writeOutboundContactsSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
 import {
@@ -357,14 +358,21 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   // Build prompt with full conversation history (both user and bot messages).
   // This makes the agent resilient to SDK session loss — the DB is the source of truth.
-  const conversationHistory = getConversationHistory(chatJid, MAX_MESSAGES_PER_PROMPT);
+  const conversationHistory = getConversationHistory(
+    chatJid,
+    MAX_MESSAGES_PER_PROMPT,
+  );
   let prompt: string;
 
   if (group.isThreadGroup && group.parentJid) {
     // Thread groups get recent parent channel context so the agent
     // knows what's being discussed (e.g., "did you see the snyk vulns?")
     const channelContext = getRecentChannelContext(group.parentJid, 5);
-    prompt = formatWithChannelContext(channelContext, conversationHistory, TIMEZONE);
+    prompt = formatWithChannelContext(
+      channelContext,
+      conversationHistory,
+      TIMEZONE,
+    );
   } else {
     prompt = formatMessages(conversationHistory, TIMEZONE);
   }
@@ -509,6 +517,10 @@ async function runAgent(
 
   // Write conversation history snapshot so the agent can page back with read_conversation_history
   writeConversationHistorySnapshot(group.folder, chatJid);
+
+  // Write global outbound-contacts snapshot so the agent knows which JIDs
+  // it's allowed to DM from any context (e.g. operator's personal DM).
+  writeOutboundContactsSnapshot(group.folder);
 
   // Wrap onOutput to track session ID from streamed results
   const wrappedOnOutput = onOutput
@@ -897,9 +909,11 @@ async function main(): Promise<void> {
     )?.[0];
     if (!mainJid) return;
     const channel = findChannel(channels, mainJid);
-    channel?.sendMessage(mainJid, msg).catch((err) =>
-      logger.warn({ err }, 'Failed to send auth failure notification'),
-    );
+    channel
+      ?.sendMessage(mainJid, msg)
+      .catch((err) =>
+        logger.warn({ err }, 'Failed to send auth failure notification'),
+      );
   });
 
   startMessageLoop().catch((err) => {
