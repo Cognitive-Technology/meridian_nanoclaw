@@ -32,6 +32,7 @@ import {
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
 import { getSecretsForGroup } from './secrets.js';
+import { getAllRegisteredGroups } from './db.js';
 import {
   loadMountAllowlist,
   validateAdditionalMounts,
@@ -362,7 +363,14 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `${CONTAINER_NAME_PREFIX}-${safeName}-${Date.now()}`;
-  const { env: secretEnv } = getSecretsForGroup(group.folder);
+  // For thread groups, inherit the parent's secret allowlist — matches how
+  // thread groups already inherit containerConfig and allowedOutboundJids.
+  let parentFolder: string | undefined;
+  if (group.isThreadGroup && group.parentJid) {
+    const allGroups = getAllRegisteredGroups();
+    parentFolder = allGroups[group.parentJid]?.folder;
+  }
+  const { env: secretEnv } = getSecretsForGroup(group.folder, parentFolder);
   const containerArgs = buildContainerArgs(mounts, containerName, secretEnv);
 
   logger.debug(

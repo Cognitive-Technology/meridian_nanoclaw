@@ -8,7 +8,10 @@ import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
-import { isGlobalOutboundJid, loadOutboundContacts } from './outbound-contacts.js';
+import {
+  isGlobalOutboundJid,
+  loadOutboundContacts,
+} from './outbound-contacts.js';
 import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
@@ -122,7 +125,11 @@ export function startIpcWatcher(deps: IpcDeps): void {
                       isSameGroup ? undefined : { noThread: true },
                     );
                     logger.info(
-                      { chatJid: destinationJid, sourceGroup, override: !!data.targetJid },
+                      {
+                        chatJid: destinationJid,
+                        sourceGroup,
+                        override: !!data.targetJid,
+                      },
                       'IPC message sent',
                     );
                   }

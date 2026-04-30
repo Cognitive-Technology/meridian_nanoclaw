@@ -34,6 +34,18 @@ ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 # Install agent-browser and claude-code globally
 RUN npm install -g agent-browser @anthropic-ai/claude-code
 
+# Install OpenCode CLI for the `delegate` skill — lets the orchestrator
+# hand off bulk/cheap work to non-Anthropic worker models.
+# Pinning to npm (vs the curl installer) keeps the Docker layer
+# reproducible and avoids surprise binary downloads at build time.
+RUN npm install -g opencode-ai
+
+# `delegate` wrapper from container/skills/delegate/bin/ goes on PATH
+# so the agent can invoke it as a normal command. The skill auto-copies
+# from container/skills/ to /home/node/.claude/skills/ at container spawn
+# (see container-runner.ts), so that's the runtime path.
+ENV PATH="/home/node/.claude/skills/delegate/bin:${PATH}"
+
 # Create app directory
 WORKDIR /app
 

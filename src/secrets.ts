@@ -113,21 +113,30 @@ function readCredentialRegistry(): Record<string, string> {
  * 1. Manifest entries matched to this group, values from process.env
  * 2. Agent-managed credentials.json (takes precedence)
  */
-export function getSecretsForGroup(groupFolder: string): {
+export function getSecretsForGroup(
+  groupFolder: string,
+  inheritFromFolder?: string,
+): {
   env: Record<string, string>;
   missing: string[];
 } {
   const env: Record<string, string> = {};
   const missing: string[] = [];
 
-  // Source 1: manifest-based secrets from process.env
+  // Source 1: manifest-based secrets from process.env.
+  // Thread groups inherit their parent's secret allowlist via
+  // inheritFromFolder so they get the same env as the parent group's
+  // containers.
   const manifest = loadManifest();
   if (manifest) {
     for (const entry of manifest.secrets) {
       if (entry.type === 'file') continue;
 
       const applies =
-        entry.groups.includes('*') || entry.groups.includes(groupFolder);
+        entry.groups.includes('*') ||
+        entry.groups.includes(groupFolder) ||
+        (inheritFromFolder !== undefined &&
+          entry.groups.includes(inheritFromFolder));
       if (!applies) continue;
 
       const value = process.env[entry.env_var];

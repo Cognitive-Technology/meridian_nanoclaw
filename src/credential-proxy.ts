@@ -25,8 +25,10 @@ import { logger } from './logger.js';
 
 const CLAUDE_OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 const CLAUDE_OAUTH_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
-/** Refresh proactively when less than this many ms remain. */
-const REFRESH_BUFFER_MS = 5 * 60 * 1000;
+/** Refresh proactively when less than this many ms remain.
+ *  Must exceed the proactive-check interval (30 min) to guarantee at least
+ *  one check falls inside the refresh window before the token expires. */
+const REFRESH_BUFFER_MS = 35 * 60 * 1000;
 
 /** Credentials file path used by Claude Code. */
 const CRED_FILE = path.join(os.homedir(), '.claude', '.credentials.json');

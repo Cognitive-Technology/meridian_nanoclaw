@@ -482,7 +482,7 @@ interface ScriptResult {
   data?: unknown;
 }
 
-const SCRIPT_TIMEOUT_MS = 30_000;
+const SCRIPT_TIMEOUT_MS = 900_000; // 15 min — transcript-sync needs token refresh + API fetches + LLM action extraction
 
 async function runScript(script: string): Promise<ScriptResult | null> {
   const scriptPath = '/tmp/task-script.sh';
@@ -592,9 +592,16 @@ async function main(): Promise<void> {
       return;
     }
 
-    // Script says wake agent — enrich prompt with script data
+    // Script says wake agent — enrich prompt with script data.
+    // Prefer .data if the script wrapped its payload; fall back to
+    // the entire result object (minus wakeAgent) so scripts that put
+    // fields at the top level still surface their data to the agent.
     log(`Script wakeAgent=true, enriching prompt with data`);
-    prompt = `[SCHEDULED TASK]\n\nScript output:\n${JSON.stringify(scriptResult.data, null, 2)}\n\nInstructions:\n${containerInput.prompt}`;
+    const scriptData = scriptResult.data ?? (() => {
+      const { wakeAgent: _, ...rest } = scriptResult;
+      return Object.keys(rest).length ? rest : null;
+    })();
+    prompt = `[SCHEDULED TASK]\n\nScript output:\n${JSON.stringify(scriptData, null, 2)}\n\nInstructions:\n${containerInput.prompt}`;
   }
 
   // Query loop: run query → wait for IPC message → run new query → repeat

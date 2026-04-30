@@ -62,14 +62,13 @@ export function loadOutboundContacts(): OutboundContact[] {
     }
     const valid = parsed.contacts.filter(
       (c): c is OutboundContact =>
-        typeof c?.jid === 'string' && c.jid.length > 0 && typeof c?.name === 'string',
+        typeof c?.jid === 'string' &&
+        c.jid.length > 0 &&
+        typeof c?.name === 'string',
     );
     cached = valid;
     cachedJids = new Set(valid.map((c) => c.jid));
-    logger.info(
-      { count: valid.length },
-      'Loaded global outbound contacts',
-    );
+    logger.info({ count: valid.length }, 'Loaded global outbound contacts');
     return cached;
   } catch (err) {
     logger.warn(
