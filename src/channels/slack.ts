@@ -14,7 +14,7 @@ import { SlackThreadSync } from './slack-sync.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
-import { downloadSlackImage, transcribeSlackAudio } from './slack-media.js';
+import { downloadSlackFile, downloadSlackImage, transcribeSlackAudio } from './slack-media.js';
 import { SlackTypingIndicator } from './slack-typing.js';
 import {
   Channel,
@@ -441,6 +441,19 @@ export class SlackChannel implements Channel {
             if (imagePath) {
               const imageNote = `[Image attached: ${imagePath} — use the Read tool to view and analyze it]`;
               content = content ? `${content}\n${imageNote}` : imageNote;
+            }
+          } else if (file.url_private && groupFolder) {
+            const filePath = await downloadSlackFile(
+              file.url_private,
+              file.name || `file-${Date.now()}`,
+              groupFolder,
+            );
+            if (filePath) {
+              const isPdf = file.mimetype === 'application/pdf' || file.name?.endsWith('.pdf');
+              const fileNote = isPdf
+                ? `[PDF attached: ${filePath} — run \`pdftotext ${filePath} -\` to extract text, or use the Read tool]`
+                : `[File attached: ${filePath} (${file.mimetype || 'unknown type'}) — use the Read tool or bash to read it]`;
+              content = content ? `${content}\n${fileNote}` : fileNote;
             }
           }
         }

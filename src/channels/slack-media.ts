@@ -110,3 +110,40 @@ export async function downloadSlackImage(
     return null;
   }
 }
+
+/**
+ * Download a generic Slack-hosted file (PDFs, documents, etc.) and save it to the
+ * IPC directory so the agent can read it. Returns the container-visible path or null.
+ */
+export async function downloadSlackFile(
+  fileUrl: string,
+  filename: string,
+  groupFolder: string,
+): Promise<string | null> {
+  const env = readEnvFile(['SLACK_BOT_TOKEN']);
+  const botToken = env.SLACK_BOT_TOKEN;
+
+  try {
+    const downloadRes = await fetch(fileUrl, {
+      headers: { Authorization: `Bearer ${botToken}` },
+    });
+    if (!downloadRes.ok) {
+      throw new Error(`Slack file download failed: ${downloadRes.status}`);
+    }
+    const fileBuffer = Buffer.from(await downloadRes.arrayBuffer());
+
+    const filesDir = path.join(DATA_DIR, 'ipc', groupFolder, 'files');
+    fs.mkdirSync(filesDir, { recursive: true });
+
+    const safe = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const destFilename = `${Date.now()}-${safe}`;
+    const destPath = path.join(filesDir, destFilename);
+    fs.writeFileSync(destPath, fileBuffer);
+
+    logger.info({ fileUrl, destPath }, 'Slack file saved for agent');
+    return `/workspace/ipc/files/${destFilename}`;
+  } catch (err) {
+    logger.error({ fileUrl, err }, 'Failed to download Slack file');
+    return null;
+  }
+}
